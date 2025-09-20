@@ -1,48 +1,130 @@
 <!doctype html>
 <html lang="id">
 <head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>TikTok Downloader</title>
-<style>
-body{font-family:system-ui,Segoe UI,Roboto,Arial;margin:40px;}
-input{width:80%;padding:8px;margin-right:8px}
-button{padding:8px}
-.result{margin-top:20px}
-a.download{display:inline-block;padding:10px 14px;border-radius:8px;text-decoration:none;border:1px solid #333}
-</style>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>TikTok Downloader (HTML only)</title>
+  <style>
+    :root{font-family:system-ui,Segoe UI,Roboto,Arial;line-height:1.4}
+    body{max-width:820px;margin:36px auto;padding:0 18px;color:#0b0b0b}
+    h1{font-size:1.6rem;margin-bottom:6px}
+    p.lead{margin-top:0;color:#333}
+    .box{margin-top:18px;display:flex;gap:8px}
+    input[type="url"]{flex:1;padding:10px;border:1px solid #ddd;border-radius:8px}
+    button{padding:10px 14px;border-radius:8px;border:none;background:#222;color:#fff;cursor:pointer}
+    .result{margin-top:20px}
+    .note{margin-top:16px;color:#666;font-size:0.95rem}
+    a.download{display:inline-block;padding:8px 12px;border-radius:8px;border:1px solid #222;text-decoration:none;margin-top:8px}
+    video{max-width:100%;border-radius:8px;margin-top:12px}
+    pre{background:#f7f7f7;padding:12px;border-radius:8px;overflow:auto}
+  </style>
 </head>
 <body>
-<h1>Downloader Video TikTok</h1>
-<p>Masukkan URL TikTok (video) lalu klik <strong>Get</strong>.</p>
+  <h1>TikTok Downloader — (HTML saja)</h1>
+  <p class="lead">Masukkan URL video TikTok lalu klik <strong>Get</strong>. Jika gagal, coba salin URL video pendek (vm.tiktok.com/...) atau gunakan versi halaman lengkap.</p>
 
+  <div class="box">
+    <input id="url" type="url" placeholder="https://www.tiktok.com/@user/video/1234567890 atau https://vm.tiktok.com/..." />
+    <button id="get">Get</button>
+  </div>
 
-<input id="url" placeholder="https://www.tiktok.com/...." />
-<button id="get">Get</button>
+  <div class="result" id="result"></div>
 
+  <p class="note">
+    Catatan: file ini memakai <code>api.allorigins.win</code> untuk melewati CORS (proxy publik). Proxy publik dapat lambat, tidak stabil, atau diblokir. Untuk penggunaan serius, pakai backend sendiri yang melakukan fetch/stream.
+  </p>
 
-<div class="result" id="result"></div>
+  <script>
+    const btn = document.getElementById('get');
+    const result = document.getElementById('result');
 
+    // Simple validator
+    function isTikTokUrl(u){
+      try {
+        const x = new URL(u);
+        return /tiktok\.com|vm\.tiktok\.com/i.test(x.hostname);
+      } catch(e){ return false; }
+    }
 
-<script>
-document.getElementById('get').addEventListener('click', async () => {
-const url = document.getElementById('url').value.trim();
-const r = document.getElementById('result');
-r.innerHTML = 'Loading...';
-try {
-const resp = await fetch('/api/get-video', {
-method: 'POST',
-headers: { 'Content-Type': 'application/json' },
-body: JSON.stringify({ url })
-});
-const data = await resp.json();
-if (!resp.ok) throw data;
-// Show link
-r.innerHTML = `<p>Found video URL:</p><p><a class="download" href="${data.video}" target="_blank" rel="noopener">Download / Open video</a></p>`;
-} catch (err) {
-r.innerHTML = '<p style="color:red">Error: ' + (err && err.error ? err.error : (err.message || 'Unknown')) + '</p>';
-}
-});
-</script>
+    // Try multiple regexes to extract possible video URL
+    function extractVideoUrl(html){
+      // 1) playAddr usually appears escaped like \"playAddr\":\"https:\\/\\/...
+      let m = html.match(/"playAddr"\s*:\s*"((?:https?:\\\\\/\\\\\/|https?:\/\/)[^"]+)"/);
+      if(m && m[1]) return m[1].replace(/\\\\\//g, '/').replace(/\\\//g, '/');
+
+      // 2) sometimes without double-escaping
+      m = html.match(/"playAddr"\s*:\s*"(https?:\/\/[^"]+)"/);
+      if(m && m[1]) return m[1];
+
+      // 3) downloadAddr field
+      m = html.match(/"downloadAddr"\s*:\s*"((?:https?:\\\\\/\\\\\/|https?:\/\/)[^"]+)"/);
+      if(m && m[1]) return m[1].replace(/\\\\\//g, '/').replace(/\\\//g, '/');
+
+      // 4) <video src="...">
+      m = html.match(/<video[^>]+src=["']([^"']+)["']/i);
+      if(m && m[1]) return m[1];
+
+      // 5) any m3u8/mp4 references
+      m = html.match(/(https?:\/\/[^"'\\s]+\\.(?:mp4|m3u8)[^"'\\s]*)/i);
+      if(m && m[1]) return m[1].replace(/\\\//g, '/');
+
+      return null;
+    }
+
+    async function fetchViaAllOrigins(targetUrl){
+      // allorigins raw endpoint; encodes the target URL
+      const proxy = 'https://api.allorigins.win/raw?url=';
+      return fetch(proxy + encodeURIComponent(targetUrl), {
+        headers: { 'Accept': 'text/html,application/xhtml+xml' },
+      });
+    }
+
+    btn.addEventListener('click', async () => {
+      const url = document.getElementById('url').value.trim();
+      result.innerHTML = '';
+      if(!url){ result.innerHTML = '<p style="color:#b00">Masukkan URL TikTok terlebih dahulu.</p>'; return; }
+      if(!isTikTokUrl(url)){ result.innerHTML = '<p style="color:#b00">Bukan URL TikTok yang valid.</p>'; return; }
+
+      result.innerHTML = '<p>Fetching... (menggunakan proxy CORS publik)</p>';
+      try {
+        // If the URL is a short vm.tiktok.com link, browser will follow redirect; we still request via proxy.
+        const resp = await fetchViaAllOrigins(url);
+        if(!resp.ok){ throw new Error('Proxy fetch gagal: ' + resp.status); }
+        const html = await resp.text();
+
+        // Try extract
+        const video = extractVideoUrl(html);
+        if(!video){
+          // Provide raw HTML so user can inspect
+          result.innerHTML = `<p style="color:#b00">Tidak menemukan URL video otomatis. TikTok mungkin mengubah markup.</p>
+                              <p>Coba buka URL langsung di browser atau gunakan backend proxy.</p>
+                              <details><summary>Show fetched HTML (truncated)</summary><pre>${html.slice(0,4000).replace(/</g,'&lt;')}</pre></details>`;
+          return;
+        }
+
+        // Some video URLs are protocol-relative or contain escaped slashes; normalize
+        let final = video.replace(/^\\/g,'').replace(/\\\//g,'/');
+
+        // Some URLs contain query params that block direct play in some environments. Show link + preview.
+        const safeHref = final;
+
+        result.innerHTML = `
+          <p>Found video URL:</p>
+          <p><a class="download" href="${safeHref}" target="_blank" rel="noopener">Open / Download video</a></p>
+          <p>You can right-click the link and choose \"Save link as...\" to download.</p>
+          <video controls src="${safeHref}"></video>
+        `;
+      } catch (err) {
+        console.error(err);
+        result.innerHTML = `<p style="color:#b00">Error: ${err.message || err}</p>
+                            <p>Jika proxy publik diblokir, gunakan backend server sendiri atau layanan pihak ketiga.</p>`;
+      }
+    });
+
+    // Allow pressing Enter in input
+    document.getElementById('url').addEventListener('keydown', (e) => {
+      if(e.key === 'Enter') btn.click();
+    });
+  </script>
 </body>
-  </html>
+</html>
